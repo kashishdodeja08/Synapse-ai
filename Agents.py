@@ -168,3 +168,135 @@ if __name__ == "__main__":
     print(f"\nContent preview:\n{lesson['content'][:250]}...")
     print(f"\nKey Points: {lesson['key_points']}")
     print(f"\nPractice Questions: {lesson['practice_questions']}")
+
+    # ============================================
+# AGENT 3: EVALUATOR (The Examiner)
+# ============================================
+
+from typing import List
+
+class QuizQuestion(BaseModel):
+    question: str = Field(description="The question text")
+    options: List[str] = Field(description="Exactly 4 options A, B, C, D")
+    correct_index: int = Field(description="0=A, 1=B, 2=C, 3=D")
+    explanation: str = Field(description="Why correct answer is right")
+
+class Quiz(BaseModel):
+    questions: List[QuizQuestion] = Field(description="5 multiple choice questions")
+    coding_problems: List[str] = Field(description="2 coding problems with descriptions")
+    topic: str = Field(description="Topic being tested")
+
+quiz_parser = PydanticOutputParser(pydantic_object=Quiz)
+
+quiz_prompt = ChatPromptTemplate.from_messages([
+    ("system", """You are a strict MLSU Examiner. Create challenging but fair assessments.
+    
+    {format_instructions}
+    
+    RULES:
+    - Generate EXACTLY 5 MCQs based ONLY on the lesson content provided
+    - Generate EXACTLY 2 coding problems
+    - Each MCQ must have 4 options with exactly one correct answer
+    - Questions must test understanding, not just memorization
+    - Include common misconceptions as distractors (wrong options)
+    - Explanations must cite specific content from the lesson
+    - Coding problems must be solvable using concepts from the lesson"""),
+    
+    ("human", """Create a quiz based on this lesson:
+    
+    {lesson_content}
+    
+    Topic: {topic}
+    Is remedial: {remedial}""")
+]).partial(format_instructions=quiz_parser.get_format_instructions())
+
+quiz_chain = quiz_prompt | llm | quiz_parser
+
+class QuizResult(BaseModel):
+    score_percent: int = Field(description="Score 0-100")
+    passed: bool = Field(description="True if score >= 60")
+    weak_areas: List[str] = Field(description="Specific subtopics failed")
+    feedback: str = Field(description="Detailed feedback for student")
+
+result_parser = PydanticOutputParser(pydantic_object=QuizResult)
+
+def run_evaluator(lesson_content: str, topic: str, remedial: bool, simulated_answers: dict = None):
+    """
+    Evaluator generates quiz and grades it.
+    For now, we simulate student answers.
+    In real version, Frontend sends answers and we grade.
+    """
+    
+    # Generate quiz using AI
+    quiz = quiz_chain.invoke({
+        "lesson_content": lesson_content[:1500],  # First 1500 chars
+        "topic": topic,
+        "remedial": remedial
+    })
+    
+    # SIMULATE GRADING (replace with real grading later)
+    # For demo: assume student gets some wrong
+    if simulated_answers is None:
+        # Default: student struggles, gets 45%
+        simulated_score = 45
+    else:
+        simulated_score = simulated_answers.get("score", 45)
+    
+    passed = simulated_score >= 60
+    
+    # Identify weak areas based on score
+    if not passed:
+        weak_areas = ["Core concepts", "Application problems"]  # Simplified
+    else:
+        weak_areas = []
+    
+    return {
+        "quiz": {
+            "questions": [q.model_dump() for q in quiz.questions],
+            "coding_problems": quiz.coding_problems,
+            "topic": quiz.topic
+        },
+        "result": {
+            "score_percent": simulated_score,
+            "passed": passed,
+            "weak_areas": weak_areas,
+            "feedback": f"Score: {simulated_score}%. {'Passed' if passed else 'Remedial session needed.'}"
+        },
+        "mastery_level": simulated_score / 100  # Update for state
+    }
+# ============================================
+# TEST: Evaluator alone
+# ============================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("TESTING EVALUATOR AGENT")
+    print("=" * 60)
+    
+    # Fake lesson from Tutor
+    fake_lesson = """
+    ## Stacks: LIFO Data Structure
+    
+    A stack follows Last In First Out (LIFO). 
+    Operations: push (add to top), pop (remove from top), peek (view top).
+    All operations are O(1) time complexity.
+    Applications: function call stack, undo operations, expression evaluation.
+    """
+    
+    print("\n--- Generating Quiz ---")
+    eval_result = run_evaluator(
+        lesson_content=fake_lesson,
+        topic="Stacks",
+        remedial=True,
+        simulated_answers={"score": 45}  # Force 45% for testing
+    )
+    
+    print(f"\nQuiz Topic: {eval_result['quiz']['topic']}")
+    print(f"Questions: {len(eval_result['quiz']['questions'])}")
+    print(f"Coding Problems: {len(eval_result['quiz']['coding_problems'])}")
+    
+    print(f"\n--- Grading ---")
+    print(f"Score: {eval_result['result']['score_percent']}%")
+    print(f"Passed: {eval_result['result']['passed']}")
+    print(f"Weak Areas: {eval_result['result']['weak_areas']}")
+    print(f"Mastery Level: {eval_result['mastery_level']}")
