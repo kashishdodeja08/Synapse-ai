@@ -1,6 +1,6 @@
 # Agents.py
 # All 4 agents in one file
-# Day 3: Architect + Tutor connected
+# Day 4: All agents + manual chain test
 
 import os
 from dotenv import load_dotenv
@@ -8,6 +8,7 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
+from typing import List
 
 # ============================================
 # SHARED: API key, LLM setup
@@ -131,49 +132,8 @@ def run_tutor(topic: str, hours: int, remedial: bool, textbook_context: str):
     }
 
 # ============================================
-# TEST: Architect plans → Tutor teaches
-# ============================================
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("TESTING: ARCHITECT → TUTOR FLOW")
-    print("=" * 60)
-    
-    # Fake textbook (replace with ChromaDB on Day 7)
-    fake_textbook = """
-    Stacks: A stack is a linear data structure that follows LIFO (Last In First Out).
-    Operations: push (add), pop (remove), peek (view top).
-    Time complexity: All operations are O(1).
-    Applications: Function call stack, undo operations, expression evaluation.
-    """
-    
-    # STEP 1: Architect plans
-    print("\n--- STEP 1: ARCHITECT PLANS ---")
-    plan = run_architect(current_unit=3, current_topic=2, mastery_level=0.45)
-    print(f"Next Topic: {plan['next_topic']}")
-    print(f"Hours: {plan['hours']}")
-    print(f"Remedial: {plan['remedial_needed']}")
-    print(f"Reason: {plan['reason']}")
-    
-    # STEP 2: Tutor teaches (uses Architect's plan)
-    print("\n--- STEP 2: TUTOR TEACHES ---")
-    lesson = run_tutor(
-        topic=plan['next_topic'],
-        hours=plan['hours'],
-        remedial=plan['remedial_needed'],
-        textbook_context=fake_textbook
-    )
-    
-    print(f"\nTitle: {lesson['title']}")
-    print(f"\nContent preview:\n{lesson['content'][:250]}...")
-    print(f"\nKey Points: {lesson['key_points']}")
-    print(f"\nPractice Questions: {lesson['practice_questions']}")
-
-    # ============================================
 # AGENT 3: EVALUATOR (The Examiner)
 # ============================================
-
-from typing import List
 
 class QuizQuestion(BaseModel):
     question: str = Field(description="The question text")
@@ -229,24 +189,21 @@ def run_evaluator(lesson_content: str, topic: str, remedial: bool, simulated_ans
     
     # Generate quiz using AI
     quiz = quiz_chain.invoke({
-        "lesson_content": lesson_content[:1500],  # First 1500 chars
+        "lesson_content": lesson_content[:1500],
         "topic": topic,
         "remedial": remedial
     })
     
-    # SIMULATE GRADING (replace with real grading later)
-    # For demo: assume student gets some wrong
+    # SIMULATE GRADING
     if simulated_answers is None:
-        # Default: student struggles, gets 45%
         simulated_score = 45
     else:
         simulated_score = simulated_answers.get("score", 45)
     
     passed = simulated_score >= 60
     
-    # Identify weak areas based on score
     if not passed:
-        weak_areas = ["Core concepts", "Application problems"]  # Simplified
+        weak_areas = ["Core concepts", "Application problems"]
     else:
         weak_areas = []
     
@@ -262,41 +219,109 @@ def run_evaluator(lesson_content: str, topic: str, remedial: bool, simulated_ans
             "weak_areas": weak_areas,
             "feedback": f"Score: {simulated_score}%. {'Passed' if passed else 'Remedial session needed.'}"
         },
-        "mastery_level": simulated_score / 100  # Update for state
+        "mastery_level": simulated_score / 100
     }
+
 # ============================================
-# TEST: Evaluator alone
+# AGENT 4: RESEARCHER (The Fact-Checker)
+# ============================================
+
+class Verification(BaseModel):
+    status: str = Field(description="VERIFIED or ERROR")
+    issues: List[str] = Field(description="List of incorrect claims found")
+    corrections: str = Field(description="Corrected explanation if errors found")
+    sources: List[str] = Field(description="Official sources checked")
+
+verify_parser = PydanticOutputParser(pydantic_object=Verification)
+
+verify_prompt = ChatPromptTemplate.from_messages([
+    ("system", """You are a meticulous Research Librarian. You verify technical claims.
+    
+    {format_instructions}
+    
+    RULES:
+    - Check ALL time complexity claims (O(n), O(log n), O(n²), etc.)
+    - Verify algorithm steps and properties
+    - Confirm code syntax is correct
+    - Check definitions against standard computer science references
+    - Be STRICT: a small error is still an error
+    - If everything is correct, say VERIFIED with empty issues list
+    - If errors found, list each issue with specific correction"""),
+    
+    ("human", """Verify these technical claims from a lesson:
+    
+    {lesson_content}
+    
+    Check:
+    1. Are all time complexities correct?
+    2. Are algorithm steps accurate?
+    3. Are definitions correct?
+    4. Is the code syntactically valid?""")
+]).partial(format_instructions=verify_parser.get_format_instructions())
+
+verify_chain = verify_prompt | llm | verify_parser
+
+def run_researcher(lesson_content: str):
+    """
+    Researcher verifies tutor content.
+    For now, uses AI self-check (no real web search yet).
+    """
+    result = verify_chain.invoke({
+        "lesson_content": lesson_content[:1500]
+    })
+    
+    return {
+        "status": result.status,
+        "issues": result.issues,
+        "corrections": result.corrections,
+        "sources": result.sources
+    }
+
+# ============================================
+# TEST SECTION - MUST BE LAST
 # ============================================
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("TESTING EVALUATOR AGENT")
+    print("TESTING ALL 4 AGENTS (MANUAL CHAIN)")
     print("=" * 60)
     
-    # Fake lesson from Tutor
-    fake_lesson = """
-    ## Stacks: LIFO Data Structure
+    # Step 1: Architect plans
+    print("\n--- STEP 1: ARCHITECT ---")
+    plan = run_architect(current_unit=3, current_topic=2, mastery_level=0.45)
+    print(f"Plan: {plan['next_topic']}, {plan['hours']}h, Remedial: {plan['remedial_needed']}")
     
-    A stack follows Last In First Out (LIFO). 
-    Operations: push (add to top), pop (remove from top), peek (view top).
-    All operations are O(1) time complexity.
-    Applications: function call stack, undo operations, expression evaluation.
-    """
-    
-    print("\n--- Generating Quiz ---")
-    eval_result = run_evaluator(
-        lesson_content=fake_lesson,
-        topic="Stacks",
-        remedial=True,
-        simulated_answers={"score": 45}  # Force 45% for testing
+    # Step 2: Tutor teaches
+    print("\n--- STEP 2: TUTOR ---")
+    fake_textbook = "Stacks follow LIFO. Push and pop are O(1). Applications: function calls, undo."
+    lesson = run_tutor(
+        topic=plan['next_topic'],
+        hours=plan['hours'],
+        remedial=plan['remedial_needed'],
+        textbook_context=fake_textbook
     )
+    print(f"Lesson: {lesson['title']}")
     
-    print(f"\nQuiz Topic: {eval_result['quiz']['topic']}")
-    print(f"Questions: {len(eval_result['quiz']['questions'])}")
-    print(f"Coding Problems: {len(eval_result['quiz']['coding_problems'])}")
-    
-    print(f"\n--- Grading ---")
+    # Step 3: Evaluator quizzes
+    print("\n--- STEP 3: EVALUATOR ---")
+    eval_result = run_evaluator(
+        lesson_content=lesson['content'],
+        topic=plan['next_topic'],
+        remedial=plan['remedial_needed'],
+        simulated_answers={"score": 45}
+    )
     print(f"Score: {eval_result['result']['score_percent']}%")
     print(f"Passed: {eval_result['result']['passed']}")
-    print(f"Weak Areas: {eval_result['result']['weak_areas']}")
-    print(f"Mastery Level: {eval_result['mastery_level']}")
+    
+    # Step 4: Researcher verifies
+    print("\n--- STEP 4: RESEARCHER ---")
+    verify = run_researcher(lesson_content=lesson['content'])
+    print(f"Status: {verify['status']}")
+    if verify['issues']:
+        print(f"Issues found: {verify['issues']}")
+    else:
+        print("No issues found")
+    
+    print("\n" + "=" * 60)
+    print("NEXT: LangGraph automatic loop")
+    print("=" * 60)
